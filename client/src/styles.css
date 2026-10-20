@@ -113,6 +113,12 @@ button.ghost { background: transparent; color: var(--ink); border: 1px solid var
 .time .track i { display: block; height: 100%; background: var(--ink); }
 .time.else .track i { background: var(--cyan); }
 .time b { text-align: right; font-weight: 700; color: var(--ink); }
+.deadline { margin-top: 12px; }
+.deadline .time { grid-template-columns: 190px 1fr 140px; }
+.time .track.late i { background: var(--pink); }
+.time b.late { color: var(--pink); }
+.deadline-none { margin-top: 12px; font-size: 0.78rem; color: var(--muted); }
+.stage-note { padding: 14px 0 18px; border-top: 1px solid var(--line); font-size: 0.8rem; }
 .argument { border-top: 1px solid var(--line); padding: 16px 0; }
 .argument h3 { margin: 0 0 6px; font-size: 1.05rem; font-weight: 800; letter-spacing: -0.03em; }
 .argument p, .person p, .quiet { margin: 0; color: var(--muted); }
@@ -148,6 +154,8 @@ a { color: inherit; }
 @media (max-width: 900px) {
   .kpis, .grid-2, .mast, .piece { grid-template-columns: 1fr; }
   .time { grid-template-columns: 108px 1fr 78px; }
+  .deadline .time { grid-template-columns: 1fr; gap: 4px; }
+  .deadline .time b { text-align: left; }
   .mast span:last-child, .meta, .actions { text-align: left; align-items: flex-start; }
   .top { flex-direction: column; align-items: flex-start; }
   .col { grid-template-columns: 1fr; }

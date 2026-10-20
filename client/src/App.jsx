@@ -13,9 +13,10 @@ const VIEWS = [
 
 function span(hours) {
   if (hours == null) return "sem histórico";
-  if (hours < 24) return `${Math.max(1, Math.round(hours))} h`;
+  if (Math.round(hours) < 24) return `${Math.max(1, Math.round(hours))} h`;
   const days = hours / 24;
-  return days < 10 ? `${String(Math.round(days * 10) / 10).replace(".", ",")} dias` : `${Math.round(days)} dias`;
+  const value = days < 10 ? String(Math.round(days * 10) / 10).replace(".", ",") : String(Math.round(days));
+  return `${value} ${value === "1" ? "dia" : "dias"}`;
 }
 
 function decimal(value) {
@@ -131,13 +132,30 @@ function when(iso) {
   }).format(new Date(iso));
 }
 
+function Deadline({ card }) {
+  if (!card.due) return <div className="deadline-none">Sem prazo no card</div>;
+  const now = Date.now();
+  const due = Date.parse(card.due);
+  const start = Date.parse(card.assignedAt || "");
+  const late = now > due;
+  const share = late ? 100 : Number.isFinite(start) && due > start ? Math.min(100, Math.max(0, ((now - start) / (due - start)) * 100)) : 0;
+  return (
+    <div className="deadline">
+      <div className="time">
+        <span>Entrega {when(card.due)}</span>
+        <div className={late ? "track late" : "track"}><i style={{ width: `${share}%` }} /></div>
+        <b className={late ? "late" : ""}>{late ? `atrasada há ${span((now - due) / 3600000)}` : `faltam ${span((due - now) / 3600000)}`}</b>
+      </div>
+    </div>
+  );
+}
+
 function Entrega({ data, focus, onFocus }) {
   const people = data.das
     .map((item) => ({ ...item, doing: item.cards.filter((card) => isWorking(card.list)) }))
     .filter((item) => item.doing.length);
   const shown = people.find((item) => item.name === focus) || people[0];
   if (!shown) return <p className="quiet">Nenhuma task em execução ou alterações.</p>;
-  const peak = Math.max(1, ...shown.doing.flatMap((card) => [card.hoursInExecution, card.hoursInAdjustments].filter((value) => value != null)));
   return (
     <section>
       <h2>Em trabalho</h2>
@@ -164,26 +182,13 @@ function Entrega({ data, focus, onFocus }) {
                 <a href={card.url}>{card.name}</a>
                 <div className="quiet">{card.client}</div>
                 {card.deck?.routine && <div className="quiet">{deliveryText(card.deck)}</div>}
-                <div className="times">
-                  {(inExecution(card.list) || card.hoursInExecution != null) && (
-                    <div className="time">
-                      <span>Execução</span>
-                      <div className="track"><i style={{ width: card.hoursInExecution != null ? `${(card.hoursInExecution / peak) * 100}%` : "0%" }} /></div>
-                      <b>{span(card.hoursInExecution)}</b>
-                    </div>
-                  )}
-                  {(inAdjustments(card.list) || card.hoursInAdjustments != null) && (
-                    <div className="time">
-                      <span>Alterações</span>
-                      <div className="track"><i style={{ width: card.hoursInAdjustments != null ? `${(card.hoursInAdjustments / peak) * 100}%` : "0%" }} /></div>
-                      <b>{span(card.hoursInAdjustments)}</b>
-                    </div>
-                  )}
-                </div>
+                <div className="quiet">{inAdjustments(card.list) ? "Em alterações" : "Em execução"} há {span(card.hoursInList)}</div>
+                <Deadline card={card} />
               </div>
             </div>
           );
         })}
+        <p className="quiet stage-note">A barra vai do dia em que o DA foi marcado no cartão até a data de entrega. Cheia, o prazo chegou; rosa, passou do prazo.</p>
       </article>
     </section>
   );
