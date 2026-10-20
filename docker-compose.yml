@@ -1,0 +1,11 @@
+services:
+  painel:
+    build: .
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./config/team.json:/app/config/team.json
+    restart: unless-stopped

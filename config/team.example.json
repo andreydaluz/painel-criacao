@@ -1,0 +1,22 @@
+{
+  "brand": "Agência",
+  "tagline": "",
+  "boardName": "Criação",
+  "wipLimit": 3,
+  "stuckDays": 14,
+  "das": [
+    { "name": "Nome do DA", "active": true },
+    { "name": "nome como está no trello", "active": true, "displayName": "Nome Como Deve Aparecer" }
+  ],
+  "atendimento": ["Nome do atendimento"],
+  "socios": [{ "name": "Nome do sócio", "note": "Sócio" }],
+  "trafego": [{ "name": "Nome do tráfego", "note": "Gerente de tráfego" }],
+  "clients": {
+    "aliases": { "abc": "Cliente ABC" },
+    "contains": { "nome de projeto": "Cliente ABC" }
+  },
+  "flowLists": ["DISTRIBUÍDOS", "EM EXECUÇÃO", "APROVAÇÃO INTERNA", "APROVAÇÃO CLIENTE", "ALTERAÇÕES", "PRODUÇÃO DE HTML"],
+  "houseLists": ["DISTRIBUÍDOS", "EM EXECUÇÃO", "APROVAÇÃO INTERNA", "ALTERAÇÕES", "PRODUÇÃO DE HTML"],
+  "doneLists": ["APROVADOS 2026", "FINALIZADOS 2026"],
+  "ignoreLists": ["PROJETOS ESPECIAIS"]
+}
