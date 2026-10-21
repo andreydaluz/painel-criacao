@@ -5,7 +5,6 @@ import { loadTeam, norm } from "./team.js";
 const FRESH_MS = 6 * 60 * 60 * 1000;
 const RETRY_MS = 15 * 60 * 1000;
 const MARK_MIN = 80;
-const STRIP_MIN = 0.25;
 const CUT_MIN = 0.1;
 const ZONE = "America/Sao_Paulo";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -116,25 +115,19 @@ function countIn(image, box, test) {
 }
 
 const pink = (r, g, b) => r > 200 && g < 80 && b < 120 && r > g + 100;
-const green = (r, g, b) => g > 150 && g > r + 20 && g > b + 30;
 const rose = (r, g, b) => r > 150 && r > g + 50 && r > b + 50 && Math.abs(g - b) < 35;
 
 const SEALS = {
   triangulo: {
-    signal: "triangulo-v2",
+    signal: "triangulo-v3",
     read(image) {
-      const { hits } = countIn(image, [205, 36, 280, 85], pink);
-      return { mark: hits, state: hits >= MARK_MIN ? "selo" : "aberto" };
-    },
-  },
-  "faixa-verde": {
-    signal: "faixa-verde-v1",
-    read(image) {
-      const strip = [0, 520, 270, 538];
-      const ok = countIn(image, strip, green);
-      const no = countIn(image, strip, rose);
-      const state = ok.hits >= ok.area * STRIP_MIN ? "selo" : no.hits >= no.area * CUT_MIN ? "cancelado" : "aberto";
-      return { mark: ok.hits, state };
+      const strip = countIn(image, [0, 520, 270, 538], rose);
+      if (strip.hits >= strip.area * CUT_MIN) return { mark: strip.hits, state: "cancelado" };
+      // Sestini (canto do briefing) e BRS (logo no topo direito da coluna esquerda).
+      const sestini = countIn(image, [205, 36, 280, 85], pink).hits;
+      const brs = countIn(image, [400, 20, 480, 90], pink).hits;
+      const mark = Math.max(sestini, brs);
+      return { mark, state: mark >= MARK_MIN ? "selo" : "aberto" };
     },
   },
 };
@@ -212,9 +205,8 @@ async function placedArt(id, kind) {
   const posts = read.filter((slide) => slide.state !== "cancelado");
   const marked = posts.filter((slide) => slide.state === "selo");
   const firstOpen = posts.find((slide) => slide.state !== "selo");
-  const through = firstOpen
-    ? marked.filter((slide) => slide.slide < firstOpen.slide).at(-1) || null
-    : marked.at(-1) || null;
+  // Selo mais avançado no deck (não para na primeira lacuna).
+  const through = marked.at(-1) || null;
   return {
     signal: SEALS[kind].signal,
     placedUntil: through ? { slide: through.slide, day: through.day, pauta: through.pauta } : null,
@@ -322,9 +314,8 @@ function pace(deck, now = new Date()) {
       : `Nenhum post com selo ainda${nextOpen ? ` · primeiro post em ${short(nextOpen)}` : ""}`;
   } else if (overdueOpenPosts) {
     status = "atrasado";
-    const late = -daysAhead;
-    phrase = late > 0 ? `${plural(late, "dia", "dias")} atrasado, ${overdue}` : overdue;
-    text = `Selo até ${short(sealedUntil)} · ${late > 0 ? `${plural(late, "dia", "dias")} atrasado · ` : ""}${overdue}`;
+    phrase = overdue;
+    text = `Selo mais avançado em ${short(sealedUntil)} · ${overdue}`;
   } else if (daysAhead > 0) {
     status = "adiantado";
     phrase = `${plural(daysAhead, "dia", "dias")} adiantado`;
