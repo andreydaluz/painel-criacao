@@ -182,13 +182,14 @@ function Entrega({ data, focus, onFocus }) {
                 <a href={card.url}>{card.name}</a>
                 <div className="quiet">{card.client}</div>
                 {card.deck?.routine && <div className="quiet">{deliveryText(card.deck)}</div>}
-                <div className="quiet">{inAdjustments(card.list) ? "Em alterações" : "Em execução"} há {span(card.hoursInList)}</div>
+                {card.deck?.routine && card.deck.pace && <div className={`pace ${card.deck.pace.status}`}>{card.deck.pace.text}</div>}
+                <div className="quiet">Na coluna {inAdjustments(card.list) ? "Alterações" : "Em execução"} há {span(card.hoursInList)}</div>
                 <Deadline card={card} />
               </div>
             </div>
           );
         })}
-        <p className="quiet stage-note">A barra vai do dia em que o DA foi marcado no cartão até a data de entrega. Cheia, o prazo chegou; rosa, passou do prazo.</p>
+        <p className="quiet stage-note">A barra vai do dia em que o DA foi marcado no cartão até a data de entrega. Cheia, o prazo chegou; rosa, passou do prazo. O tempo na coluna é do cartão no Trello, não a hora trabalhada. Quanto mais o DA move o cartão ao começar e ao parar, mais perto da hora real ele fica.</p>
       </article>
     </section>
   );
@@ -473,8 +474,11 @@ export function App() {
         <section>
           {data.clientTime && (
             <>
-              <h2>Tempo de DA por cliente</h2>
-              <p className="lede">Quantas tasks de cada cliente passaram por execução ou alterações no mês, e quanto tempo elas ficaram lá. O número principal conta só horas úteis; embaixo, o tempo corrido, com noites e fins de semana.</p>
+              <h2>Tempo das tasks em execução e alterações, por cliente</h2>
+              <p className="lede">Quanto tempo as tasks de cada cliente ficaram nas colunas Em execução e Alterações do Trello no mês. É o tempo do cartão na coluna, não as horas exatas que o DA trabalhou nele. O número principal conta só horas úteis; embaixo, o tempo corrido, com noites e fins de semana.</p>
+              <div className="callout">
+                <b>Quanto melhor o uso das colunas, mais perto da hora real.</b> Quando o DA leva o cartão para Em execução ao começar e tira de lá ao parar ou entregar, este número fica cada vez mais próximo das horas que cada DA de fato trabalhou.
+              </div>
               <table style={{ marginTop: 18, marginBottom: 8 }}>
                 <thead>
                   <tr>

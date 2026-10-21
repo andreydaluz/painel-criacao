@@ -37,6 +37,8 @@ h2 { font-size: 1.35rem; margin: 0 0 8px; letter-spacing: -0.03em; }
 .top { display: flex; justify-content: space-between; gap: 32px; align-items: center; }
 .kicker { margin: 0 0 10px; color: var(--pink); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; }
 .lede { max-width: 62ch; color: var(--muted); margin: 14px 0 0; }
+.callout { max-width: 72ch; margin: 16px 0 0; padding: 12px 16px; background: var(--card); border-left: 4px solid var(--pink); font-size: 0.92rem; }
+.callout b { color: var(--pink); }
 .actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 button {
   background: var(--ink);
@@ -117,6 +119,8 @@ button.ghost { background: transparent; color: var(--ink); border: 1px solid var
 .deadline .time { grid-template-columns: 190px 1fr 140px; }
 .time .track.late i { background: var(--pink); }
 .time b.late { color: var(--pink); }
+.pace { margin-top: 2px; font-size: 0.85rem; font-weight: 700; color: var(--ink); }
+.pace.atrasado { color: var(--pink); }
 .deadline-none { margin-top: 12px; font-size: 0.78rem; color: var(--muted); }
 .stage-note { padding: 14px 0 18px; border-top: 1px solid var(--line); font-size: 0.8rem; }
 .argument { border-top: 1px solid var(--line); padding: 16px 0; }

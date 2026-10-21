@@ -3,8 +3,11 @@ import { db } from "./db.js";
 import { norm } from "./team.js";
 
 const FRESH_MS = 6 * 60 * 60 * 1000;
-const SIGNAL = "triangulo";
+const RETRY_MS = 15 * 60 * 1000;
+const SIGNAL = "triangulo-v2";
 const MARK_MIN = 80;
+const ZONE = "America/Sao_Paulo";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function isRoutine(name) {
   const key = norm(name);
@@ -175,6 +178,7 @@ async function placedArt(id) {
     placedUntil: through ? { slide: through.slide, day: through.day, pauta: through.pauta } : null,
     nextBlank: firstOpen ? { slide: firstOpen.slide, day: firstOpen.day, pauta: firstOpen.pauta } : null,
     placedPosts: through ? marked.filter((slide) => slide.slide <= through.slide).length : marked.length,
+    seals: posts.map((slide) => ({ slide: slide.slide, day: slide.day, sealed: slide.mark >= MARK_MIN })),
   };
 }
 
@@ -206,9 +210,11 @@ async function fetchDeck(url) {
 
 async function cachedDeck(url) {
   const row = db.prepare("SELECT payload, checked_at FROM deck_reads WHERE url = ?").get(url);
-  if (row && Date.now() - new Date(row.checked_at).getTime() < FRESH_MS) {
+  const age = row ? Date.now() - new Date(row.checked_at).getTime() : Infinity;
+  if (age < FRESH_MS) {
     const saved = JSON.parse(row.payload);
-    if (saved.signal === SIGNAL || saved.open === false) return saved;
+    const retry = saved.error && age > RETRY_MS;
+    if (!retry && (saved.signal === SIGNAL || saved.open === false)) return saved;
   }
   let payload;
   try {
@@ -220,6 +226,72 @@ async function cachedDeck(url) {
     "INSERT INTO deck_reads (url, payload, checked_at) VALUES (?, ?, ?) ON CONFLICT(url) DO UPDATE SET payload = excluded.payload, checked_at = excluded.checked_at",
   ).run(url, JSON.stringify(payload), new Date().toISOString());
   return payload;
+}
+
+function localToday(now) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+function dayISO(day, today) {
+  if (!day) return null;
+  const [d, m] = day.split("/").map(Number);
+  const ref = Date.parse(`${today}T00:00:00Z`);
+  const year = Number(today.slice(0, 4));
+  const best = [year - 1, year, year + 1]
+    .map((y) => Date.UTC(y, m - 1, d))
+    .reduce((a, b) => (Math.abs(b - ref) < Math.abs(a - ref) ? b : a));
+  return new Date(best).toISOString().slice(0, 10);
+}
+
+function short(iso) {
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+}
+
+function plural(count, one, many) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+function pace(deck, now = new Date()) {
+  const today = localToday(now);
+  const sealedUntil = dayISO(deck.placedUntil?.day, today);
+  const nextOpen = dayISO(deck.nextBlank?.day, today);
+  const openDates = (deck.seals || []).filter((post) => !post.sealed).map((post) => dayISO(post.day, today));
+  const overdueOpenPosts = openDates.filter((iso) => iso <= today).length;
+  const daysAhead = sealedUntil ? Math.round((Date.parse(sealedUntil) - Date.parse(today)) / DAY_MS) : null;
+  const allSealed = Boolean(sealedUntil) && !nextOpen;
+  const overdue = overdueOpenPosts
+    ? `${plural(overdueOpenPosts, "post", "posts")} de hoje ou antes sem selo`
+    : "";
+  let status;
+  let phrase;
+  let text;
+  if (allSealed) {
+    status = "todos";
+    phrase = null;
+    text = `Todos os posts com selo, até ${short(sealedUntil)}`;
+  } else if (!sealedUntil) {
+    status = overdueOpenPosts ? "atrasado" : "sem-selo";
+    phrase = overdue || null;
+    text = overdue
+      ? `Nenhum post com selo · ${overdue}`
+      : `Nenhum post com selo ainda${nextOpen ? ` · primeiro post em ${short(nextOpen)}` : ""}`;
+  } else if (overdueOpenPosts) {
+    status = "atrasado";
+    const late = -daysAhead;
+    phrase = late > 0 ? `${plural(late, "dia", "dias")} atrasado, ${overdue}` : overdue;
+    text = `Selo até ${short(sealedUntil)} · ${late > 0 ? `${plural(late, "dia", "dias")} atrasado · ` : ""}${overdue}`;
+  } else if (daysAhead > 0) {
+    status = "adiantado";
+    phrase = `${plural(daysAhead, "dia", "dias")} adiantado`;
+    text = `Selo até o post de ${short(sealedUntil)} · ${phrase} · próximo sem selo: ${short(nextOpen)}`;
+  } else {
+    status = "em-dia";
+    phrase = "em dia";
+    text = daysAhead === 0
+      ? `Selo até o post de hoje (${short(sealedUntil)}) · em dia · próximo sem selo: ${short(nextOpen)}`
+      : `Selo até ${short(sealedUntil)} · em dia · próximo post em ${short(nextOpen)}`;
+  }
+  return { today, sealedUntil, nextOpen, allSealed, daysAhead, overdueOpenPosts, status, phrase, text };
 }
 
 export async function describeDeck(card) {
@@ -255,6 +327,8 @@ export async function describeDeck(card) {
   const deliveryPercent = deck.posts && deliveredPosts != null
     ? Math.round((deliveredPosts / deck.posts) * 100)
     : null;
+  const rhythm = deck.seals ? pace(deck) : null;
+  const versusToday = rhythm?.phrase ? ` Em relação a hoje (${short(rhythm.today)}): ${rhythm.phrase}.` : "";
   return {
     routine,
     access: "aberta",
@@ -267,6 +341,7 @@ export async function describeDeck(card) {
     last: deck.last,
     placedUntil: deck.placedUntil || null,
     nextBlank: deck.nextBlank || null,
-    summary: `Rotina. Apresentação aberta: ${deck.posts} posts${span}.${until}${blank}`,
+    pace: rhythm,
+    summary: `Rotina. Apresentação aberta: ${deck.posts} posts${span}.${until}${blank}${versusToday}`,
   };
 }
