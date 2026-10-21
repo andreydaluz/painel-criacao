@@ -345,7 +345,7 @@ export async function buildDashboard(now = new Date()) {
     })),
     arguments: argumentsForPartners,
     reading:
-      "O tempo mostrado é o de fila: desde que a pessoa foi marcada no cartão e desde que o cartão entrou na coluna.",
+      "O tempo mostrado aqui é de fila (marcação no cartão e entrada na coluna). Nas horas por cliente, só conta o que ficou em Em execução — Alterações e Em pausa ficam de fora.",
   };
 }
 
@@ -498,9 +498,19 @@ function buildArguments({ team, daDirectory, columns, noDa, inactiveOnCards, stu
 
   if (stuck.length) {
     const oldest = [...stuck].sort((a, b) => (b.hoursInList ?? 0) - (a.hoursInList ?? 0))[0];
+    const list = norm(oldest.list);
+    const head = `O mais antigo na casa é “${oldest.name}”, há ${formatSpan(oldest.hoursInList)} em ${titleList(oldest.list)}.`;
+    let detail;
+    if (list === norm("EM EXECUÇÃO")) {
+      detail = "Esse tempo em Em execução entra nas horas do cliente.";
+    } else if (list === norm("ALTERAÇÕES") || list === norm("EM PAUSA")) {
+      detail = "É tempo de fila: não entra nas horas trabalhadas do cliente. Vale olhar se alguém precisa retomar a peça.";
+    } else {
+      detail = "Vale olhar se a peça precisa avançar de coluna.";
+    }
     notes.push({
       title: `${piece(stuck.length)} já ${stuck.length === 1 ? "passou" : "passaram"} de ${team.stuckDays} dias na mesma coluna`,
-      text: `O mais antigo na casa é “${oldest.name}”, há ${formatSpan(oldest.hoursInList)} em ${titleList(oldest.list)}. Esse tempo entra na média junto com o que está em andamento.`,
+      text: `${head} ${detail}`,
     });
   }
 
