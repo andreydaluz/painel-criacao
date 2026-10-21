@@ -1,11 +1,12 @@
 import { inflateSync } from "node:zlib";
 import { db } from "./db.js";
-import { loadTeam, norm } from "./team.js";
+import { norm } from "./team.js";
 
 const FRESH_MS = 6 * 60 * 60 * 1000;
 const RETRY_MS = 15 * 60 * 1000;
+const SIGNAL = "triangulo-v4";
 const MARK_MIN = 80;
-const CUT_MIN = 0.1;
+const CUT_MIN = 0.45;
 const ZONE = "America/Sao_Paulo";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -117,30 +118,35 @@ function countIn(image, box, test) {
 const pink = (r, g, b) => r > 200 && g < 80 && b < 120 && r > g + 100;
 const rose = (r, g, b) => r > 150 && r > g + 50 && r > b + 50 && Math.abs(g - b) < 35;
 
-const SEALS = {
-  triangulo: {
-    signal: "triangulo-v3",
-    read(image) {
-      const strip = countIn(image, [0, 520, 270, 538], rose);
-      if (strip.hits >= strip.area * CUT_MIN) return { mark: strip.hits, state: "cancelado" };
-      // Sestini (canto do briefing) e BRS (logo no topo direito da coluna esquerda).
-      const sestini = countIn(image, [205, 36, 280, 85], pink).hits;
-      const brs = countIn(image, [400, 20, 480, 90], pink).hits;
-      const mark = Math.max(sestini, brs);
-      return { mark, state: mark >= MARK_MIN ? "selo" : "aberto" };
-    },
-  },
-};
-
-function sealFor(client) {
-  const kinds = loadTeam().clients?.seals || {};
-  const match = Object.entries(kinds).find(([name]) => norm(name) === norm(client));
-  return SEALS[match?.[1]] ? match[1] : "triangulo";
+function logoMark(image) {
+  const strip = countIn(image, [0, 520, 270, 538], rose);
+  if (strip.hits >= strip.area * CUT_MIN) return { mark: strip.hits, state: "cancelado" };
+  const { width, height, pixels } = image;
+  const x0 = Math.round(width * (200 / 960));
+  const x1 = Math.round(width * (500 / 960));
+  const y0 = Math.round(height * (10 / 540));
+  const y1 = Math.round(height * (35 / 540));
+  const win = Math.max(8, Math.round(width * (40 / 960)));
+  const step = Math.max(1, Math.round(win / 20));
+  let mark = 0;
+  for (let y = y0; y <= y1; y += step) {
+    for (let x = x0; x <= x1; x += step) {
+      let hits = 0;
+      for (let yy = y; yy < y + win && yy < height; yy += 1) {
+        for (let xx = x; xx < x + win && xx < width; xx += 1) {
+          const i = (yy * width + xx) * 3;
+          if (pink(pixels[i], pixels[i + 1], pixels[i + 2])) hits += 1;
+        }
+      }
+      if (hits > mark) mark = hits;
+    }
+  }
+  return { mark, state: mark >= MARK_MIN ? "selo" : "aberto" };
 }
 
-export function approvalMark(png, kind = "triangulo") {
+export function approvalMark(png) {
   const image = decodePng(png);
-  return image ? SEALS[kind].read(image) : null;
+  return image ? logoMark(image) : null;
 }
 
 function slideText(html) {
@@ -169,7 +175,18 @@ async function mapLimit(items, limit, worker) {
   return results;
 }
 
-async function placedArt(id, kind) {
+function furthestSeal(marked, today) {
+  if (!marked.length) return null;
+  return marked.reduce((best, slide) => {
+    const iso = dayISO(slide.day, today);
+    const bestIso = dayISO(best.day, today);
+    if (iso > bestIso) return slide;
+    if (iso === bestIso && slide.slide > best.slide) return slide;
+    return best;
+  });
+}
+
+async function placedArt(id) {
   const response = await fetch(`https://docs.google.com/presentation/d/${id}/htmlpresent`, {
     redirect: "follow",
     signal: AbortSignal.timeout(20000),
@@ -181,11 +198,13 @@ async function placedArt(id, kind) {
     const text = slideText(part);
     const date = text.match(/\b(\d{2})\.(\d{2})\b/);
     const pauta = (text.match(/Pauta:[^\S\n]*([^\n\uFFFD]{0,70})/) || [])[1] || "";
+    const cancelled = /\bCANCELADO\b/i.test(text);
     const image = part.match(/https:\/\/docs\.google\.com\/presentation[^"]+format=png/);
     return {
       slide: index + 1,
       day: date ? `${date[1]}/${date[2]}` : null,
       pauta: pauta.replace(/\s*Formato:.*$/, "").trim(),
+      cancelled,
       image: image ? image[0].replace(/&amp;/g, "&") : null,
     };
   });
@@ -194,8 +213,9 @@ async function placedArt(id, kind) {
     try {
       const file = await fetch(slide.image, { signal: AbortSignal.timeout(20000) });
       if (!file.ok) return { ...slide, state: null };
-      const read = approvalMark(Buffer.from(await file.arrayBuffer()), kind);
-      return { ...slide, state: read?.state ?? null };
+      const read = approvalMark(Buffer.from(await file.arrayBuffer()));
+      const state = slide.cancelled || read?.state === "cancelado" ? "cancelado" : read?.state ?? null;
+      return { ...slide, state };
     } catch {
       return { ...slide, state: null };
     }
@@ -205,10 +225,10 @@ async function placedArt(id, kind) {
   const posts = read.filter((slide) => slide.state !== "cancelado");
   const marked = posts.filter((slide) => slide.state === "selo");
   const firstOpen = posts.find((slide) => slide.state !== "selo");
-  // Selo mais avançado no deck (não para na primeira lacuna).
-  const through = marked.at(-1) || null;
+  const today = localToday(new Date());
+  const through = furthestSeal(marked, today);
   return {
-    signal: SEALS[kind].signal,
+    signal: SIGNAL,
     placedUntil: through ? { slide: through.slide, day: through.day, pauta: through.pauta } : null,
     nextBlank: firstOpen ? { slide: firstOpen.slide, day: firstOpen.day, pauta: firstOpen.pauta } : null,
     placedPosts: marked.length,
@@ -218,7 +238,7 @@ async function placedArt(id, kind) {
   };
 }
 
-async function fetchDeck(url, kind) {
+async function fetchDeck(url) {
   const id = url.split("/d/")[1];
   const response = await fetch(`https://docs.google.com/presentation/d/${id}/export?format=txt`, {
     redirect: "follow",
@@ -231,13 +251,13 @@ async function fetchDeck(url, kind) {
   const parsed = parseDeck(text);
   let visual = null;
   try {
-    visual = await placedArt(id, kind);
+    visual = await placedArt(id);
   } catch {
     visual = null;
   }
   return {
     open: true,
-    signal: SEALS[kind].signal,
+    signal: SIGNAL,
     ...parsed,
     ...(visual || {}),
     posts: parsed.posts - (visual?.cancelled || 0),
@@ -245,17 +265,17 @@ async function fetchDeck(url, kind) {
   };
 }
 
-async function cachedDeck(url, kind) {
+async function cachedDeck(url) {
   const row = db.prepare("SELECT payload, checked_at FROM deck_reads WHERE url = ?").get(url);
   const age = row ? Date.now() - new Date(row.checked_at).getTime() : Infinity;
   if (age < FRESH_MS) {
     const saved = JSON.parse(row.payload);
     const retry = saved.error && age > RETRY_MS;
-    if (!retry && (saved.signal === SEALS[kind].signal || saved.open === false)) return saved;
+    if (!retry && (saved.signal === SIGNAL || saved.open === false)) return saved;
   }
   let payload;
   try {
-    payload = await fetchDeck(url, kind);
+    payload = await fetchDeck(url);
   } catch {
     payload = { open: false, error: true };
   }
@@ -292,40 +312,52 @@ function pace(deck, now = new Date()) {
   const today = localToday(now);
   const sealedUntil = dayISO(deck.placedUntil?.day, today);
   const nextOpen = dayISO(deck.nextBlank?.day, today);
-  const openDates = (deck.seals || []).filter((post) => !post.sealed).map((post) => dayISO(post.day, today));
-  const overdueOpenPosts = openDates.filter((iso) => iso <= today).length;
+  const overdueDates = (deck.seals || [])
+    .filter((post) => !post.sealed)
+    .map((post) => dayISO(post.day, today))
+    .filter((iso) => iso && iso <= today)
+    .sort();
+  const overdueOpenPosts = overdueDates.length;
+  const firstOverdue = overdueDates[0] || null;
+  const lastOverdue = overdueDates.at(-1) || null;
   const daysAhead = sealedUntil ? Math.round((Date.parse(sealedUntil) - Date.parse(today)) / DAY_MS) : null;
   const allSealed = Boolean(sealedUntil) && !nextOpen;
-  const overdue = overdueOpenPosts
-    ? `${plural(overdueOpenPosts, "post", "posts")} de hoje ou antes sem selo`
-    : "";
+  // Lacunas com data até hoje — não confundir com "os posts de hoje estão sem selo".
+  let gap = "";
+  if (overdueOpenPosts === 1) {
+    gap = `1 post em atraso ainda sem o selo de aprovação (${short(firstOverdue)})`;
+  } else if (overdueOpenPosts > 1) {
+    gap = firstOverdue === lastOverdue
+      ? `${overdueOpenPosts} posts em atraso ainda sem o selo de aprovação (${short(firstOverdue)})`
+      : `${overdueOpenPosts} posts em atraso ainda sem o selo de aprovação (de ${short(firstOverdue)} a ${short(lastOverdue)})`;
+  }
   let status;
   let phrase;
   let text;
   if (allSealed) {
     status = "todos";
     phrase = null;
-    text = `Todos os posts com selo, até ${short(sealedUntil)}`;
+    text = `Selo de aprovação em todos os posts, até ${short(sealedUntil)}`;
   } else if (!sealedUntil) {
     status = overdueOpenPosts ? "atrasado" : "sem-selo";
-    phrase = overdue || null;
-    text = overdue
-      ? `Nenhum post com selo · ${overdue}`
-      : `Nenhum post com selo ainda${nextOpen ? ` · primeiro post em ${short(nextOpen)}` : ""}`;
+    phrase = gap || null;
+    text = gap
+      ? `Nenhum selo de aprovação · ${gap}`
+      : `Nenhum selo de aprovação ainda${nextOpen ? ` · primeiro post em ${short(nextOpen)}` : ""}`;
   } else if (overdueOpenPosts) {
     status = "atrasado";
-    phrase = overdue;
-    text = `Selo mais avançado em ${short(sealedUntil)} · ${overdue}`;
+    phrase = gap;
+    text = `Selo de aprovação até ${short(sealedUntil)} · ${gap}`;
   } else if (daysAhead > 0) {
     status = "adiantado";
     phrase = `${plural(daysAhead, "dia", "dias")} adiantado`;
-    text = `Selo até o post de ${short(sealedUntil)} · ${phrase} · próximo sem selo: ${short(nextOpen)}`;
+    text = `Selo de aprovação até ${short(sealedUntil)} · ${phrase} · próximo sem o selo: ${short(nextOpen)}`;
   } else {
     status = "em-dia";
     phrase = "em dia";
     text = daysAhead === 0
-      ? `Selo até o post de hoje (${short(sealedUntil)}) · em dia · próximo sem selo: ${short(nextOpen)}`
-      : `Selo até ${short(sealedUntil)} · em dia · próximo post em ${short(nextOpen)}`;
+      ? `Selo de aprovação até hoje (${short(sealedUntil)}) · em dia · próximo sem o selo: ${short(nextOpen)}`
+      : `Selo de aprovação até ${short(sealedUntil)} · em dia · próximo sem o selo: ${short(nextOpen)}`;
   }
   return { today, sealedUntil, nextOpen, allSealed, daysAhead, overdueOpenPosts, status, phrase, text };
 }
@@ -341,7 +373,7 @@ export async function describeDeck(card) {
       summary: "Rotina. A descrição do cartão não tem link de apresentação.",
     };
   }
-  const deck = await cachedDeck(link, sealFor(card.client));
+  const deck = await cachedDeck(link);
   if (!deck.open) {
     return {
       routine,
@@ -360,11 +392,11 @@ export async function describeDeck(card) {
   const until = deck.placedUntil ? ` O selo de aprovação está até o ${where(deck.placedUntil)}.` : "";
   const blank = deck.nextBlank
     ? deck.placedUntil
-      ? ` A partir do ${where(deck.nextBlank)} o post ainda não tem o selo.`
+      ? ` A partir do ${where(deck.nextBlank)} o post ainda não tem o selo de aprovação.`
       : ` Nenhum post tem o selo de aprovação. O primeiro sem a marca é o ${where(deck.nextBlank)}.`
     : "";
   const after = deck.sealedAfterGap
-    ? ` Depois dessa lacuna, mais ${plural(deck.sealedAfterGap, "post já tem", "posts já têm")} o selo.`
+    ? ` Depois dessa lacuna, mais ${plural(deck.sealedAfterGap, "post já tem", "posts já têm")} o selo de aprovação.`
     : "";
   const dropped = deck.cancelled ? ` ${plural(deck.cancelled, "post cancelado ficou", "posts cancelados ficaram")} fora da conta.` : "";
   const deliveredPosts = deck.placedPosts ?? null;

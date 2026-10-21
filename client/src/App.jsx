@@ -119,8 +119,8 @@ function deliveryText(deck) {
   if (!deck) return "Sem medida de entrega";
   if (deck.access === "fechada") return "Link fechado";
   if (deck.access === "sem-link") return "Sem apresentação";
-  if (deck.deliveryPercent == null) return "Selo ainda não lido";
-  return `${deck.deliveredPosts} de ${deck.posts} posts com o selo`;
+  if (deck.deliveryPercent == null) return "Selo de aprovação ainda não lido";
+  return `${deck.deliveredPosts} de ${deck.posts} posts com o selo de aprovação`;
 }
 
 function when(iso) {
