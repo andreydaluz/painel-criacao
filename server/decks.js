@@ -1,11 +1,12 @@
 import { inflateSync } from "node:zlib";
 import { db } from "./db.js";
-import { norm } from "./team.js";
+import { loadTeam, norm } from "./team.js";
 
 const FRESH_MS = 6 * 60 * 60 * 1000;
 const RETRY_MS = 15 * 60 * 1000;
-const SIGNAL = "triangulo-v2";
 const MARK_MIN = 80;
+const STRIP_MIN = 0.25;
+const CUT_MIN = 0.1;
 const ZONE = "America/Sao_Paulo";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -54,7 +55,7 @@ function paeth(a, b, c) {
   return c;
 }
 
-export function approvalMark(png) {
+function decodePng(png) {
   let offset = 8;
   let width = 0;
   let height = 0;
@@ -76,16 +77,12 @@ export function approvalMark(png) {
   if (colorType !== 2 || !width || !height) return null;
   const raw = inflateSync(Buffer.concat(idat));
   const stride = width * 3;
+  const pixels = Buffer.alloc(stride * height);
   let previous = Buffer.alloc(stride);
-  let rowStart = 0;
-  let mark = 0;
-  const y0 = Math.round(height * (36 / 540));
-  const y1 = Math.round(height * (85 / 540));
-  const x0 = Math.round(width * (205 / 960));
-  const x1 = Math.round(width * (280 / 960));
   for (let y = 0; y < height; y += 1) {
+    const rowStart = y * (stride + 1);
     const filter = raw[rowStart];
-    const row = Buffer.alloc(stride);
+    const row = pixels.subarray(y * stride, (y + 1) * stride);
     for (let i = 0; i < stride; i += 1) {
       const value = raw[rowStart + 1 + i];
       const left = i >= 3 ? row[i - 3] : 0;
@@ -97,28 +94,71 @@ export function approvalMark(png) {
       else if (filter === 4) row[i] = (value + paeth(left, up, upLeft)) & 255;
       else row[i] = value;
     }
-    if (y >= y0 && y <= y1) {
-      for (let x = x0; x <= x1; x += 1) {
-        const i = x * 3;
-        const red = row[i];
-        const green = row[i + 1];
-        const blue = row[i + 2];
-        if (red > 200 && green < 80 && blue < 120 && red > green + 100) mark += 1;
-      }
-    }
     previous = row;
-    rowStart += stride + 1;
   }
-  return mark;
+  return { width, height, pixels };
+}
+
+function countIn(image, box, test) {
+  const { width, height, pixels } = image;
+  const x0 = Math.round(width * (box[0] / 960));
+  const y0 = Math.round(height * (box[1] / 540));
+  const x1 = Math.min(width - 1, Math.round(width * (box[2] / 960)));
+  const y1 = Math.min(height - 1, Math.round(height * (box[3] / 540)));
+  let hits = 0;
+  for (let y = y0; y <= y1; y += 1) {
+    for (let x = x0; x <= x1; x += 1) {
+      const i = (y * width + x) * 3;
+      if (test(pixels[i], pixels[i + 1], pixels[i + 2])) hits += 1;
+    }
+  }
+  return { hits, area: (x1 - x0 + 1) * (y1 - y0 + 1) };
+}
+
+const pink = (r, g, b) => r > 200 && g < 80 && b < 120 && r > g + 100;
+const green = (r, g, b) => g > 150 && g > r + 20 && g > b + 30;
+const rose = (r, g, b) => r > 150 && r > g + 50 && r > b + 50 && Math.abs(g - b) < 35;
+
+const SEALS = {
+  triangulo: {
+    signal: "triangulo-v2",
+    read(image) {
+      const { hits } = countIn(image, [205, 36, 280, 85], pink);
+      return { mark: hits, state: hits >= MARK_MIN ? "selo" : "aberto" };
+    },
+  },
+  "faixa-verde": {
+    signal: "faixa-verde-v1",
+    read(image) {
+      const strip = [0, 520, 270, 538];
+      const ok = countIn(image, strip, green);
+      const no = countIn(image, strip, rose);
+      const state = ok.hits >= ok.area * STRIP_MIN ? "selo" : no.hits >= no.area * CUT_MIN ? "cancelado" : "aberto";
+      return { mark: ok.hits, state };
+    },
+  },
+};
+
+function sealFor(client) {
+  const kinds = loadTeam().clients?.seals || {};
+  const match = Object.entries(kinds).find(([name]) => norm(name) === norm(client));
+  return SEALS[match?.[1]] ? match[1] : "triangulo";
+}
+
+export function approvalMark(png, kind = "triangulo") {
+  const image = decodePng(png);
+  return image ? SEALS[kind].read(image) : null;
 }
 
 function slideText(html) {
   return html
     .replace(/<style[\s\S]*?<\/style>/g, " ")
+    .replace(/<\/p>/g, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/&#\d+;/g, " ")
     .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
     .trim();
 }
 
@@ -136,7 +176,7 @@ async function mapLimit(items, limit, worker) {
   return results;
 }
 
-async function placedArt(id) {
+async function placedArt(id, kind) {
   const response = await fetch(`https://docs.google.com/presentation/d/${id}/htmlpresent`, {
     redirect: "follow",
     signal: AbortSignal.timeout(20000),
@@ -147,7 +187,7 @@ async function placedArt(id) {
   const slides = html.split('<div role="group" class="slide"').slice(1).map((part, index) => {
     const text = slideText(part);
     const date = text.match(/\b(\d{2})\.(\d{2})\b/);
-    const pauta = (text.match(/Pauta:\s*(.{0,70})/) || [])[1] || "";
+    const pauta = (text.match(/Pauta:[^\S\n]*([^\n\uFFFD]{0,70})/) || [])[1] || "";
     const image = part.match(/https:\/\/docs\.google\.com\/presentation[^"]+format=png/);
     return {
       slide: index + 1,
@@ -157,32 +197,36 @@ async function placedArt(id) {
     };
   });
   const scored = await mapLimit(slides, 4, async (slide) => {
-    if (!slide.day || !slide.image) return { ...slide, mark: null };
+    if (!slide.day || !slide.image) return { ...slide, state: null };
     try {
       const file = await fetch(slide.image, { signal: AbortSignal.timeout(20000) });
-      if (!file.ok) return { ...slide, mark: null };
-      const mark = approvalMark(Buffer.from(await file.arrayBuffer()));
-      return { ...slide, mark };
+      if (!file.ok) return { ...slide, state: null };
+      const read = approvalMark(Buffer.from(await file.arrayBuffer()), kind);
+      return { ...slide, state: read?.state ?? null };
     } catch {
-      return { ...slide, mark: null };
+      return { ...slide, state: null };
     }
   });
-  const posts = scored.filter((slide) => slide.day && slide.mark != null);
-  const marked = posts.filter((slide) => slide.mark >= MARK_MIN);
-  const firstOpen = posts.find((slide) => slide.mark < MARK_MIN);
+  const read = scored.filter((slide) => slide.day && slide.state);
+  const cancelled = read.filter((slide) => slide.state === "cancelado").length;
+  const posts = read.filter((slide) => slide.state !== "cancelado");
+  const marked = posts.filter((slide) => slide.state === "selo");
+  const firstOpen = posts.find((slide) => slide.state !== "selo");
   const through = firstOpen
     ? marked.filter((slide) => slide.slide < firstOpen.slide).at(-1) || null
     : marked.at(-1) || null;
   return {
-    signal: SIGNAL,
+    signal: SEALS[kind].signal,
     placedUntil: through ? { slide: through.slide, day: through.day, pauta: through.pauta } : null,
     nextBlank: firstOpen ? { slide: firstOpen.slide, day: firstOpen.day, pauta: firstOpen.pauta } : null,
-    placedPosts: through ? marked.filter((slide) => slide.slide <= through.slide).length : marked.length,
-    seals: posts.map((slide) => ({ slide: slide.slide, day: slide.day, sealed: slide.mark >= MARK_MIN })),
+    placedPosts: marked.length,
+    sealedAfterGap: firstOpen ? marked.filter((slide) => slide.slide > firstOpen.slide).length : 0,
+    cancelled,
+    seals: posts.map((slide) => ({ slide: slide.slide, day: slide.day, sealed: slide.state === "selo" })),
   };
 }
 
-async function fetchDeck(url) {
+async function fetchDeck(url, kind) {
   const id = url.split("/d/")[1];
   const response = await fetch(`https://docs.google.com/presentation/d/${id}/export?format=txt`, {
     redirect: "follow",
@@ -195,30 +239,31 @@ async function fetchDeck(url) {
   const parsed = parseDeck(text);
   let visual = null;
   try {
-    visual = await placedArt(id);
+    visual = await placedArt(id, kind);
   } catch {
     visual = null;
   }
   return {
     open: true,
-    signal: SIGNAL,
+    signal: SEALS[kind].signal,
     ...parsed,
     ...(visual || {}),
+    posts: parsed.posts - (visual?.cancelled || 0),
     placedUntil: visual?.placedUntil ?? null,
   };
 }
 
-async function cachedDeck(url) {
+async function cachedDeck(url, kind) {
   const row = db.prepare("SELECT payload, checked_at FROM deck_reads WHERE url = ?").get(url);
   const age = row ? Date.now() - new Date(row.checked_at).getTime() : Infinity;
   if (age < FRESH_MS) {
     const saved = JSON.parse(row.payload);
     const retry = saved.error && age > RETRY_MS;
-    if (!retry && (saved.signal === SIGNAL || saved.open === false)) return saved;
+    if (!retry && (saved.signal === SEALS[kind].signal || saved.open === false)) return saved;
   }
   let payload;
   try {
-    payload = await fetchDeck(url);
+    payload = await fetchDeck(url, kind);
   } catch {
     payload = { open: false, error: true };
   }
@@ -305,7 +350,7 @@ export async function describeDeck(card) {
       summary: "Rotina. A descrição do cartão não tem link de apresentação.",
     };
   }
-  const deck = await cachedDeck(link);
+  const deck = await cachedDeck(link, sealFor(card.client));
   if (!deck.open) {
     return {
       routine,
@@ -314,7 +359,11 @@ export async function describeDeck(card) {
       summary: "Rotina. A apresentação está com o link fechado.",
     };
   }
-  const span = deck.first && deck.last ? `, de ${deck.first} a ${deck.last}` : "";
+  const today = localToday(new Date());
+  const days = (deck.seals || []).map((post) => dayISO(post.day, today)).sort();
+  const first = days.length ? short(days[0]) : deck.first;
+  const last = days.length ? short(days.at(-1)) : deck.last;
+  const span = first && last ? `, de ${first} a ${last}` : "";
   const clean = (value) => String(value || "").replace(/\s+Format\w*.*$/i, "").trim();
   const where = (slide) => `slide ${slide.slide} (${slide.day}${clean(slide.pauta) ? `, ${clean(slide.pauta)}` : ""})`;
   const until = deck.placedUntil ? ` O selo de aprovação está até o ${where(deck.placedUntil)}.` : "";
@@ -323,6 +372,10 @@ export async function describeDeck(card) {
       ? ` A partir do ${where(deck.nextBlank)} o post ainda não tem o selo.`
       : ` Nenhum post tem o selo de aprovação. O primeiro sem a marca é o ${where(deck.nextBlank)}.`
     : "";
+  const after = deck.sealedAfterGap
+    ? ` Depois dessa lacuna, mais ${plural(deck.sealedAfterGap, "post já tem", "posts já têm")} o selo.`
+    : "";
+  const dropped = deck.cancelled ? ` ${plural(deck.cancelled, "post cancelado ficou", "posts cancelados ficaram")} fora da conta.` : "";
   const deliveredPosts = deck.placedPosts ?? null;
   const deliveryPercent = deck.posts && deliveredPosts != null
     ? Math.round((deliveredPosts / deck.posts) * 100)
@@ -337,11 +390,12 @@ export async function describeDeck(card) {
     approved: deck.approved,
     deliveredPosts,
     deliveryPercent,
-    first: deck.first,
-    last: deck.last,
+    first,
+    last,
     placedUntil: deck.placedUntil || null,
     nextBlank: deck.nextBlank || null,
     pace: rhythm,
-    summary: `Rotina. Apresentação aberta: ${deck.posts} posts${span}.${until}${blank}${versusToday}`,
+    cancelled: deck.cancelled || 0,
+    summary: `Rotina. Apresentação aberta: ${deck.posts} posts${span}.${until}${blank}${after}${dropped}${versusToday}`,
   };
 }

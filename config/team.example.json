@@ -13,7 +13,8 @@
   "trafego": [{ "name": "Nome do tráfego", "note": "Gerente de tráfego" }],
   "clients": {
     "aliases": { "abc": "Cliente ABC" },
-    "contains": { "nome de projeto": "Cliente ABC" }
+    "contains": { "nome de projeto": "Cliente ABC" },
+    "seals": { "Cliente ABC": "faixa-verde" }
   },
   "flowLists": ["DISTRIBUÍDOS", "EM EXECUÇÃO", "APROVAÇÃO INTERNA", "APROVAÇÃO CLIENTE", "ALTERAÇÕES", "PRODUÇÃO DE HTML"],
   "houseLists": ["DISTRIBUÍDOS", "EM EXECUÇÃO", "APROVAÇÃO INTERNA", "ALTERAÇÕES", "PRODUÇÃO DE HTML"],
