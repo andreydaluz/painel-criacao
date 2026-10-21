@@ -329,7 +329,13 @@ export async function buildDashboard(now = new Date()) {
     columns,
     atendimento,
     clients,
-    clientTime: buildClientTime(now, new Map(cards.map((card) => [card.id, clientFromName(card.name)]))),
+    workLists: team.workLists || ["EM EXECUÇÃO"],
+    pauseLists: team.pauseLists || [],
+    clientTime: buildClientTime(
+      now,
+      new Map(cards.map((card) => [card.id, clientFromName(card.name)])),
+      team.workLists || ["EM EXECUÇÃO"],
+    ),
     noDa: noDa.map((card) => ({
       name: card.name,
       url: card.url,
@@ -376,10 +382,10 @@ function businessHours(from, to) {
   return total / 3600000;
 }
 
-function buildClientTime(now, clientByCard) {
+function buildClientTime(now, clientByCard, workLists = ["EM EXECUÇÃO"]) {
   const rows = db.prepare("SELECT card_id, date, payload FROM actions WHERE card_id IS NOT NULL ORDER BY date ASC").all();
   if (!rows.length) return null;
-  const working = new Set([norm("EM EXECUÇÃO"), norm("ALTERAÇÕES")]);
+  const working = new Set((workLists.length ? workLists : ["EM EXECUÇÃO"]).map(norm));
   const byCard = new Map();
   for (const row of rows) {
     const list = byCard.get(row.card_id) || [];
@@ -482,12 +488,11 @@ function buildArguments({ team, daDirectory, columns, noDa, inactiveOnCards, stu
 
   const clientCol = columns.find((column) => norm(column.name) === norm("APROVAÇÃO CLIENTE"));
   const doingCol = columns.find((column) => norm(column.name) === norm("EM EXECUÇÃO"));
-  const adjustCol = columns.find((column) => norm(column.name) === norm("ALTERAÇÕES"));
-  const doingCount = (doingCol?.openCount || 0) + (adjustCol?.openCount || 0);
+  const doingCount = doingCol?.openCount || 0;
   if (clientCol && doingCount && clientCol.openCount > doingCount) {
     notes.push({
       title: "Tem mais peça esperando o cliente do que sendo feita",
-      text: `${clientCol.openCount} cartões estão em aprovação do cliente e ${doingCount} em execução ou alterações. Execução e alterações contam como trabalho do DA. O que está com o cliente já saiu da mesa${clientCol.avgHoursOpen != null ? `. O tempo médio parado com o cliente, onde há data de entrada, é ${formatSpan(clientCol.avgHoursOpen)}` : ""}.`,
+      text: `${clientCol.openCount} cartões estão em aprovação do cliente e ${doingCount} em execução. Só Em execução conta como tempo de trabalho do DA. O que está com o cliente já saiu da mesa${clientCol.avgHoursOpen != null ? `. O tempo médio parado com o cliente, onde há data de entrada, é ${formatSpan(clientCol.avgHoursOpen)}` : ""}.`,
     });
   }
 

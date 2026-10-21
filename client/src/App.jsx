@@ -111,8 +111,19 @@ function inAdjustments(list) {
   return plainList(list) === "alteracoes";
 }
 
-function isWorking(list) {
-  return inExecution(list) || inAdjustments(list);
+function inPause(list) {
+  return plainList(list) === "em pausa";
+}
+
+function inQueue(list) {
+  return inAdjustments(list) || inPause(list);
+}
+
+function columnStayLabel(list) {
+  if (inPause(list)) return "Em pausa (relógio parado)";
+  if (inAdjustments(list)) return "Na fila de Alterações (não conta como hora trabalhada)";
+  if (inExecution(list)) return "Em execução";
+  return `Na coluna ${list}`;
 }
 
 function deliveryText(deck) {
@@ -150,12 +161,37 @@ function Deadline({ card }) {
   );
 }
 
+function CardPiece({ card }) {
+  const measured = card.deck?.routine && card.deck.deliveryPercent != null;
+  return (
+    <div className={measured ? "piece" : "piece plain"}>
+      {measured && (
+        <div className="ring" style={{ "--p": card.deck.deliveryPercent }}>
+          <span>{card.deck.deliveryPercent}%</span>
+        </div>
+      )}
+      <div>
+        <a href={card.url}>{card.name}</a>
+        <div className="quiet">{card.client}</div>
+        {card.deck?.routine && <div className="quiet">{deliveryText(card.deck)}</div>}
+        {card.deck?.routine && card.deck.pace && <div className={`pace ${card.deck.pace.status}`}>{card.deck.pace.text}</div>}
+        <div className="quiet">{columnStayLabel(card.list)} há {span(card.hoursInList)}</div>
+        <Deadline card={card} />
+      </div>
+    </div>
+  );
+}
+
 function Entrega({ data, focus, onFocus }) {
   const people = data.das
-    .map((item) => ({ ...item, doing: item.cards.filter((card) => isWorking(card.list)) }))
-    .filter((item) => item.doing.length);
+    .map((item) => ({
+      ...item,
+      doing: item.cards.filter((card) => inExecution(card.list)),
+      queued: item.cards.filter((card) => inQueue(card.list)),
+    }))
+    .filter((item) => item.doing.length || item.queued.length);
   const shown = people.find((item) => item.name === focus) || people[0];
-  if (!shown) return <p className="quiet">Nenhuma task em execução ou alterações.</p>;
+  if (!shown) return <p className="quiet">Nenhuma task em execução, pausa ou alterações.</p>;
   return (
     <section>
       <h2>Em trabalho</h2>
@@ -163,33 +199,27 @@ function Entrega({ data, focus, onFocus }) {
         {people.map((item) => (
           <button key={item.name} className={item.name === shown.name ? "on" : ""} onClick={() => onFocus(item.name)}>
             {first(item.name)}
-            <small>{item.doing.length} {item.doing.length === 1 ? "task" : "tasks"}</small>
+            <small>{item.doing.length} em execução{item.queued.length ? ` · ${item.queued.length} na fila` : ""}</small>
           </button>
         ))}
       </nav>
       <article className="stage">
         <h3>{displayName(shown.name)}{!shown.active && <span className="tag"> {shown.note}</span>}</h3>
-        {shown.doing.map((card) => {
-          const measured = card.deck?.routine && card.deck.deliveryPercent != null;
-          return (
-            <div className={measured ? "piece" : "piece plain"} key={card.id}>
-              {measured && (
-                <div className="ring" style={{ "--p": card.deck.deliveryPercent }}>
-                  <span>{card.deck.deliveryPercent}%</span>
-                </div>
-              )}
-              <div>
-                <a href={card.url}>{card.name}</a>
-                <div className="quiet">{card.client}</div>
-                {card.deck?.routine && <div className="quiet">{deliveryText(card.deck)}</div>}
-                {card.deck?.routine && card.deck.pace && <div className={`pace ${card.deck.pace.status}`}>{card.deck.pace.text}</div>}
-                <div className="quiet">Na coluna {inAdjustments(card.list) ? "Alterações" : "Em execução"} há {span(card.hoursInList)}</div>
-                <Deadline card={card} />
-              </div>
-            </div>
-          );
-        })}
-        <p className="quiet stage-note">A barra vai do dia em que o DA foi marcado no cartão até a data de entrega. Cheia, o prazo chegou; rosa, passou do prazo. O tempo na coluna é do cartão no Trello, não a hora trabalhada. Quanto mais o DA move o cartão ao começar e ao parar, mais perto da hora real ele fica.</p>
+        {shown.doing.length > 0 && (
+          <>
+            <p className="quiet" style={{ marginTop: 0 }}>Em execução — só esta coluna conta no tempo do cliente.</p>
+            {shown.doing.map((card) => <CardPiece key={card.id} card={card} />)}
+          </>
+        )}
+        {shown.queued.length > 0 && (
+          <>
+            <p className="quiet" style={{ marginTop: shown.doing.length ? 18 : 0 }}>
+              Na fila — Alterações e Em pausa não entram nas horas trabalhadas.
+            </p>
+            {shown.queued.map((card) => <CardPiece key={card.id} card={card} />)}
+          </>
+        )}
+        <p className="quiet stage-note">A barra vai do dia em que o DA foi marcado no cartão até a data de entrega. Cheia, o prazo chegou; rosa, passou do prazo. Para o relógio bater certo: mover para Em execução ao começar, para Em pausa ao parar (almoço, outra task) e para Alterações quando estiver só aguardando retorno — sem contar tempo.</p>
       </article>
     </section>
   );
@@ -474,10 +504,10 @@ export function App() {
         <section>
           {data.clientTime && (
             <>
-              <h2>Tempo das tasks em execução e alterações, por cliente</h2>
-              <p className="lede">Quanto tempo as tasks de cada cliente ficaram nas colunas Em execução e Alterações do Trello no mês. É o tempo do cartão na coluna, não as horas exatas que o DA trabalhou nele. O número principal conta só horas úteis; embaixo, o tempo corrido, com noites e fins de semana.</p>
+              <h2>Tempo das tasks em execução, por cliente</h2>
+              <p className="lede">Quanto tempo as tasks de cada cliente ficaram na coluna Em execução do Trello no mês. Alterações e Em pausa não entram nesta conta. É o tempo do cartão na coluna, não as horas exatas que o DA trabalhou nele. O número principal conta só horas úteis; embaixo, o tempo corrido, com noites e fins de semana.</p>
               <div className="callout">
-                <b>Quanto melhor o uso das colunas, mais perto da hora real.</b> Quando o DA leva o cartão para Em execução ao começar e tira de lá ao parar ou entregar, este número fica cada vez mais próximo das horas que cada DA de fato trabalhou.
+                <b>Quanto melhor o uso das colunas, mais perto da hora real.</b> Levar o cartão para Em execução ao começar e tirar de lá ao parar (Em pausa), deixar em Alterações ou entregar deixa este número cada vez mais próximo das horas de fato trabalhadas.
               </div>
               <table style={{ marginTop: 18, marginBottom: 8 }}>
                 <thead>

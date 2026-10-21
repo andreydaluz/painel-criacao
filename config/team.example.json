@@ -16,8 +16,10 @@
     "contains": { "nome de projeto": "Cliente ABC" },
     "seals": {}
   },
-  "flowLists": ["DISTRIBUÍDOS", "EM EXECUÇÃO", "APROVAÇÃO INTERNA", "APROVAÇÃO CLIENTE", "ALTERAÇÕES", "PRODUÇÃO DE HTML"],
-  "houseLists": ["DISTRIBUÍDOS", "EM EXECUÇÃO", "APROVAÇÃO INTERNA", "ALTERAÇÕES", "PRODUÇÃO DE HTML"],
+  "flowLists": ["DISTRIBUÍDOS", "EM EXECUÇÃO", "EM PAUSA", "APROVAÇÃO INTERNA", "APROVAÇÃO CLIENTE", "ALTERAÇÕES", "PRODUÇÃO DE HTML"],
+  "houseLists": ["DISTRIBUÍDOS", "EM EXECUÇÃO", "EM PAUSA", "APROVAÇÃO INTERNA", "ALTERAÇÕES", "PRODUÇÃO DE HTML"],
+  "workLists": ["EM EXECUÇÃO"],
+  "pauseLists": ["EM PAUSA"],
   "doneLists": ["APROVADOS 2026", "FINALIZADOS 2026"],
   "ignoreLists": ["PROJETOS ESPECIAIS"]
 }
