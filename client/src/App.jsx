@@ -263,7 +263,9 @@ export function App() {
     setLocked(false);
     setPerson((current) => current || body.das.find((item) => item.active)?.name || null);
     setFocus((current) => {
-      const eligible = body.das.filter((item) => item.cards.some((card) => isWorking(card.list)));
+      const eligible = body.das.filter((item) =>
+        item.cards.some((card) => inExecution(card.list) || inQueue(card.list)),
+      );
       if (current && eligible.some((item) => item.name === current)) return current;
       return eligible[0]?.name || null;
     });
